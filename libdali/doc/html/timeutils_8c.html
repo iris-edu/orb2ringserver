@@ -100,7 +100,7 @@ Macros</h2></td></tr>
 #define&#160;</td><td class="memItemRight" valign="bottom"><b>TM_LEAP_CHECK</b>(n)&#160;&#160;&#160;((!(((n) + 1900) % 400) || (!(((n) + 1900) % 4) &amp;&amp; (((n) + 1900) % 100))) != 0)</td></tr>
 <tr class="separator:abfd0478fd92fb317fbc5ba80f47a7e53"><td class="memSeparator" colspan="2">&#160;</td></tr>
 <tr class="memitem:aab74a49878c61dca4a3391bd4c75f5bf"><td class="memItemLeft" align="right" valign="top"><a class="anchor" id="aab74a49878c61dca4a3391bd4c75f5bf"></a>
-#define&#160;</td><td class="memItemRight" valign="bottom"><b>TM_WRAP</b>(a, b, m)&#160;&#160;&#160;((a) = ((a) &lt;  0  ) ? ((b)--, (a) + (m)) : (a))</td></tr>
+#define&#160;</td><td class="memItemRight" valign="bottom"><b>TM_WRAP</b>(a, b, m)&#160;&#160;&#160;((a) = ((a) &lt; 0) ? ((b)--, (a) + (m)) : (a))</td></tr>
 <tr class="separator:aab74a49878c61dca4a3391bd4c75f5bf"><td class="memSeparator" colspan="2">&#160;</td></tr>
 </table><table class="memberdecls">
 <tr class="heading"><td colspan="2"><h2 class="groupheader"><a name="func-members"></a>
@@ -515,15 +515,15 @@ Variables</h2></td></tr>
       </table>
 </div><div class="memdoc">
 <b>Initial value:</b><div class="fragment"><div class="line">=</div>
-<div class="line">  <span class="stringliteral">&quot;pivotal_gmtime_r. Copyright (C) 2009  Paul Sheer. Terms and &quot;</span></div>
-<div class="line">  <span class="stringliteral">&quot;conditions apply. Visit http://2038bug.com/ for more info.&quot;</span></div>
+<div class="line">    <span class="stringliteral">&quot;pivotal_gmtime_r. Copyright (C) 2009  Paul Sheer. Terms and &quot;</span></div>
+<div class="line">    <span class="stringliteral">&quot;conditions apply. Visit http://2038bug.com/ for more info.&quot;</span></div>
 </div><!-- fragment -->
 </div>
 </div>
 </div><!-- contents -->
 <!-- start footer part -->
 <hr class="footer"/><address class="footer"><small>
-Generated on Thu Aug 1 2013 16:58:33 for libdali by &#160;<a href="http://www.doxygen.org/index.html">
+Generated on Mon Oct 17 2016 23:31:18 for libdali by &#160;<a href="http://www.doxygen.org/index.html">
 <img class="footer" src="doxygen.png" alt="doxygen"/>
 </a> 1.8.4
 </small></address>

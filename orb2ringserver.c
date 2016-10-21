@@ -23,7 +23,7 @@
 #include "Pkt.h"
 
 #define PACKAGE   "orb2ringserver"
-#define VERSION   "1.4"
+#define VERSION   "1.5"
 
 static int verbose     = 0;
 static char *match     = 0;        /* ORB streams to match */
