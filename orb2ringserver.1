@@ -13,9 +13,10 @@ orb2ringserver \- copy data from an orb to a ringserver as miniSEED
     \fIorbserver\fP \fIringserver\fP
 
 .fi
+
 .SH SUPPORT
-.br
 Contributed: NO BRTT support -- please contact author.
+
 .SH DESCRIPTION
 \fBorb2ringserver\fP collects selected time series packets from an
 orbserver(1), converts the data to 512-byte miniSEED records and
@@ -23,7 +24,7 @@ transmits the records to a ringserver (via DataLink).  If the orb
 packet already contains a 512-byte miniSEED record it is forwarded
 as-is.  The ringserver program is commonly configured to serve the
 data via the SeedLink protocol.
-.LP
+
 Due to the differences between ORB packet lengths and miniSEED
 records, the program maintains a small internal buffer for each time
 series.  This allows the program to create full and efficient miniSEED
@@ -32,15 +33,13 @@ transmission.  The amount of delay depends on the sample rate of the
 data and the compressability of the series, for most purposes it is
 inconsequential.  If the original packet from the ORB is already a
 512-byte miniSEED record no delay is incurred.
-.LP
+
 The orbserver and ringserver are specified as \fIhost\fP:\fIport\fP.
 Both host and port may be empty (blank), in which case \fIhost\fP
 defaults to \fBlocalhost\fP, and port defaults to \fB6510\fP (for the
 orbserver) or \fB16000\fP (for the ringserver).  The orbserver port
 may be either an explicit number, or an alphanumeric name which is
 looked up in the file \fI$ANTELOPE/data/pf/orbserver_names.pf\fP.
-.LP
-
 
 .SH OPTIONS
 .IP "-v      "
@@ -88,7 +87,6 @@ specified, the \fIstatefile\fP will be written every number of
 \fIpkts\fP processes to mitigate issues related to unexpected crashes.
 
 .SH EXAMPLE
-.in 2c
 .nf
 %\fB orb2orb -m 'IU.*' -S state/orb2ringserver -v localhost:6510 localhost:16000\fP
 orb2ringserver: orb2ringserver version: 0.1
@@ -97,7 +95,7 @@ orb2ringserver: Resuming ORB position from state file
 orb2ringserver: Connected to ringserver at localhost:16000
  ...
 .fi
-.in
+
 .SH "USAGE"
 This program generates 512-byte miniSEED records with the expectation
 that the destination ringserver can easily be configured to serve data
@@ -115,19 +113,20 @@ The internal buffering of time series data can add latency to the data
 streams.  The amount of latency added depends on the sample rate and
 compression of the time series.  For relatively high rate data (>20
 sps) the amount of latency added is quite small for most purposes.
-.LP
+
 Normally when a termination signal is received the program will flush
 it's internal buffers and send all remaining data to the destination
 ringserver.  This process will likely create "unfilled" miniSEED
 records, this is a very minor issue in most cases.
-.LP
+
 If a termination signal is received while the connection to the
 destination ringserver is broken the probgram will exit without
 flusing it's internal buffer.  Additionally, the read position of the
-orbserver is saved as the last orb packet receioved, which is not
+orbserver is saved as the last orb packet received, which is not
 necessarily related to the last data transmitted to the ringsever.  In
 short, this scenario will likely generate a gap in all time series.
 .SH AUTHOR
+.nf
 Chad Trabant
-.br
 IRIS Data Management Center
+.fi

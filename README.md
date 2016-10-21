@@ -24,4 +24,4 @@ inconsequential.  By default, if the original packet from the ORB is
 already a 512-byte miniSEED record it is not repackaged and no delay
 is incurred.
 
-See the orb2ringserver(1) man page for further information.
+See the [orb2ringserver man page](orb2ringserver.md) for further information.
