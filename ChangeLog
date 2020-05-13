@@ -1,3 +1,11 @@
+2020.134:
+	- Incorporate changes from Doug Neuhauser, including these features:
+	  * Add -F option to control flushing of data based on channel rate
+	    and duration.
+	  * Add -l option to specify miniSEED record length to create.
+	  * Avoid holding time-torn data in internal buffers, and instead
+	    flush the previous data when a time tear is detected.
+
 2016.295: 1.5
 	- Update libmseed to 2.18.
 	- Update libdali to 1.7.

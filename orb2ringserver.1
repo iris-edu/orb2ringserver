@@ -1,10 +1,12 @@
-.TH ORB2RINGSERVER 1 2012-11-15 "Antelope Contrib SW" "User Commands"
+.TH ORB2RINGSERVER 1 2020-05-13 "Antelope Contrib SW" "User Commands"
 .SH NAME
 orb2ringserver \- copy data from an orb to a ringserver as miniSEED
 .SH SYNOPSIS
 .nf
 \fBorb2ringserver\fP  [-v]
     [-f \fIflush-latency\fP]
+    [-F \fIflush-rate[@flush-duration\fP]]
+    [-l \fIreclen\fP]
     [-R \fIreconnect-interval\fP]
     [-m \fImatch\fP]
     [-r \fIreject\fP]
@@ -53,6 +55,21 @@ ensures that data do not remain in the buffers when the channel has
 stopped flowing.  The mechanism can be disabled by specifying a value
 of 0.
 
+.IP "-F rate[@duration]"
+Perform a fast flush from internal buffers for data channels where
+\fIrate\fP (specified in samples per second) is >= data sampling rate.
+If a \fIduration\fP (in seconds) is specified the fast flush will
+occur when at least that duration of data has been accumulated.  This
+option will almost certainly result in the creation of unfilled data
+records, but allows controlling latency of data streams added by this
+program.  The mechanism is turned off by default (a value of zero).
+
+.IP "-l reclen"
+Specify the miniSEED record length to create, with a default of 512
+bytes.  Other common options are 256 or 128 for reduced latency.
+Note that this option does not effect data that are already miniSEED
+records, which are forwarded directly.
+
 .IP "-R interval"
 If the connection to the destination ringserver is broken attempt to
 reconnect at \fIinterval\fP in seconds, default is 60 seconds.  If the
@@ -89,7 +106,7 @@ specified, the \fIstatefile\fP will be written every number of
 .SH EXAMPLE
 .nf
 %\fB orb2orb -m 'IU.*' -S state/orb2ringserver -v localhost:6510 localhost:16000\fP
-orb2ringserver: orb2ringserver version: 0.1
+orb2ringserver: orb2ringserver version: 1.0
 orb2ringserver: Connected to orbserver at localhost:6510
 orb2ringserver: Resuming ORB position from state file
 orb2ringserver: Connected to ringserver at localhost:16000
@@ -97,15 +114,15 @@ orb2ringserver: Connected to ringserver at localhost:16000
 .fi
 
 .SH "USAGE"
-This program generates 512-byte miniSEED records with the expectation
-that the destination ringserver can easily be configured to serve data
-via the SeedLink protocol.  The ringserver nor the DataLink protocol
-are limited to miniSEED or 512-bytes, but this is expected to be the
-most common use for this software.
+This program generates 512-byte miniSEED records by default with
+the expectation that the destination ringserver can easily be
+configured to serve data via the SeedLink protocol.  The ringserver nor
+the DataLink protocol are limited to miniSEED or 512-bytes, but
+this is expected to be the most common use for this software.
 
 .nf
 The ringserver software is available from:
-\fBhttps://seiscode.iris.washington.edu/projects/ringserver\fP
+\fBhttps://github.com/iris-edu/ringserver\fP
 .fi
 
 .SH "BUGS AND CAVEATS"

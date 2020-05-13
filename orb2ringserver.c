@@ -7,8 +7,6 @@
  * build environment to compile.
  *
  * Chad Trabant, IRIS Data Managment Center
- *
- * Modified: 2015.042
  ***************************************************************************/
 
 #include <stdio.h>
@@ -23,7 +21,7 @@
 #include "Pkt.h"
 
 #define PACKAGE   "orb2ringserver"
-#define VERSION   "1.5"
+#define VERSION   "1.6dev"
 
 static int verbose     = 0;
 static char *match     = 0;        /* ORB streams to match */
@@ -35,6 +33,11 @@ static char *statefile = 0;        /* A file to save the ORB packet id */
 static int stateinter  = 0;        /* Interval to bury the pktid (packets recv'd) */
 static int reconnectinterval = 60; /* Interval to wait between reconnection attempts */
 static int flushlatency = 500;     /* Flush data buffers if not updated for latency in seconds */
+static int flushfastrate = 0;      /* Flush data buffers if sample rate >= this value, 0: disabled */
+static hptime_t flushfastduration = 0;  /* Desired miniSEED duration in HPTMODULUS, 0: disabled */
+
+#define DEFAULT_MSRECLEN 512       /* Default miniSEED recordlength */
+static int msreclen = DEFAULT_MSRECLEN;
 
 static char *orbaddr   = 0;
 static char *rsaddr    = 0;
@@ -59,12 +62,13 @@ static int handlestream (char *streamname, char *typename, PktChannel *pktchan,
 static int packtraces (MSTrace *mst, int flush, hptime_t flushtime);
 static void sendrecord (char *record, int reclen, void *handlerdata);
 static void logmststats ( MSTrace *mst );
-static int isalldig (char *check);
+static void clearmststats ( MSTrace *mst );
 static void mortician ();
 static int  parameter_proc (int argcount, char **argvec);
 static char *getoptval (int argcount, char **argvec, int argopt);
 static void elog_printlog (char *msg);
 static void elog_printerr (char *msg);
+static int isalldig (char *check);
 
 static void
 usage(void)
@@ -73,6 +77,12 @@ usage(void)
   fprintf(stderr,"\nUsage: %s <options> ORB ringserver\n\n", PACKAGE);
   fprintf(stderr,"  -v                  Verbosity, up to 3 levels.\n");
   fprintf(stderr,"  -f latency          Flush data buffers with at least latency in seconds\n");
+  fprintf(stderr,"  -F rate[@duration]  Fast flush data buffers for channels with samples_per_second >= rate\n"); 
+  fprintf(stderr,"                      If @duration specified, flush when the specified duration is present\n");
+  fprintf(stderr,"                      If @duration not specified, flush immediately on qualifying input\n");
+  fprintf(stderr,"                      Duration is specified in seconds of time series coverage\n");
+  fprintf(stderr,"                      A rate of 0 (default value) disables this feature.\n");
+  fprintf(stderr,"  -l reclen           miniSEED record length to create, default is %d\n", DEFAULT_MSRECLEN);
   fprintf(stderr,"  -R interval         Reconnect to ringserver at this interval in seconds\n");
   fprintf(stderr,"  -m match            Regular expression to match ORB packets,\n");
   fprintf(stderr,"                        default is all waveform data.\n");
@@ -188,11 +198,17 @@ main (int argc, char **argv)
     }
   
   /* Set the ORB selector and rejector if provided */
-  if ( match )
+  if ( match ) {
     orbselect(orb, match);
-  if ( reject )
+    if ( verbose )
+      ms_log (0, "Negotiated orbselect() with: %s\n", match);
+  }
+  if ( reject ) {
     orbreject(orb, reject);
-  
+    if ( verbose )
+      ms_log (0, "Negotiated orbreject() with: %s\n", reject);
+  }
+
   /* Allocate and initialize DataLink connection description */
   if ( ! (dlcp = dl_newdlcp (rsaddr, PACKAGE)) )
     {
@@ -326,7 +342,7 @@ main (int argc, char **argv)
  * handlestream:
  *
  * Add the packet data to the trace buffer, pack the buffer and send
- * it on.  If the original packet is a 512-byte miniSEED record it
+ * it on.  If the original packet is a recognized miniSEED record it
  * will be sent instead unless re-packaging is specifically requested.
  *
  * Returns the number of records packed/transmitted on success and -1
@@ -340,28 +356,11 @@ handlestream (char *streamname, char *typename, PktChannel *pktchan,
   MSTrace *mst = NULL;
   int origreclen = 0;
   int recordspacked = 0;
-  
-  if ( ! (msr = msr_init (msr)) )
-    {
-      ms_log (2, "Could not (re)initialize MSRecord\n");
-      return -1;
-    }
-  
-  /* Populate an MSRecord */
-  ms_strncpclean (msr->network, pktchan->net, 2);
-  ms_strncpclean (msr->station, pktchan->sta, 5);
-  ms_strncpclean (msr->location, pktchan->loc, 2);
-  ms_strncpclean (msr->channel, pktchan->chan, 3);
-  
-  msr->starttime = (hptime_t)(MS_EPOCH2HPTIME(pktchan->time) + 0.5);
-  msr->samprate = pktchan->samprate;
-  
-  msr->datasamples = pktchan->data;
-  msr->numsamples = pktchan->nsamp;
-  msr->samplecnt = pktchan->nsamp;
-  msr->sampletype = ( pktchan->isfloat ) ? 'f' : 'i';
-  
-  /* If this packet is a 512-byte miniSEED record send the original to
+  MSTrace *prevmst = NULL;
+  MSTrace *existing_mst = NULL;
+  hptime_t mst_duration = 0;
+
+  /* If this packet is a recognized byte miniSEED record send the original to
    * the SeedLink server, otherwise add it to the trace buffer packaging.
    *
    * As of Antelope 4.5 the miniSEED record starts 14 bytes from the
@@ -371,13 +370,43 @@ handlestream (char *streamname, char *typename, PktChannel *pktchan,
   
   origreclen = ms_detect (rawpacket+14, (nbytes-14));
   
-  if ( origreclen == 512 )
+  if ( origreclen == 512 || origreclen == 256 || origreclen == 128 )
     {
-      sendrecord (rawpacket+14, 512, NULL);
+      /* Antelope miniSEED packet. */
+      if (verbose >= 2)
+	ms_log (0, "%s(): streamname=%s miniSEED\n", __func__, streamname);
+      sendrecord (rawpacket+14, origreclen, NULL);
       recordspacked = 1;
     }
   else
     {
+      /* Antelope unstuffed waveform data. */
+      int flushflag = 0;
+
+      if ( ! (msr = msr_init (msr)) )
+	{
+	  ms_log (2, "Could not (re)initialize MSRecord\n");
+	  return -1;
+	}
+  
+      /* Populate an MSRecord */
+      ms_strncpclean (msr->network, pktchan->net, 2);
+      ms_strncpclean (msr->station, pktchan->sta, 5);
+      ms_strncpclean (msr->location, pktchan->loc, 2);
+      ms_strncpclean (msr->channel, pktchan->chan, 3);
+  
+      msr->starttime = (hptime_t)(MS_EPOCH2HPTIME(pktchan->time) + 0.5);
+      msr->samprate = pktchan->samprate;
+
+      msr->datasamples = pktchan->data;
+      msr->numsamples = pktchan->nsamp;
+      msr->samplecnt = pktchan->nsamp;
+      msr->sampletype = ( pktchan->isfloat ) ? 'f' : 'i';
+  
+      /* First look for an existing trace structure for this SEED NSLC. */
+      mst = mstg->traces;
+      existing_mst = mst_findmatch (mst, 0, msr->network, msr->station, msr->location, msr->channel);
+      
       /* Add data to trace buffer, creating new entry or extending as needed */
       if ( ! (mst = mst_addmsrtogroup (mstg, msr, 1, -1.0, -1.0)) )
 	{
@@ -385,15 +414,20 @@ handlestream (char *streamname, char *typename, PktChannel *pktchan,
 	  return -1;
 	}
       
+      /* If we did not create a new MSTrace, then there is no data gap. */
+      if (existing_mst == mst)
+        existing_mst = NULL;
+
       /* To keep small variations in the sample rate or time base from accumulating
        * to large errors, re-base the time of the buffer by back projecting from
-       * the endtime, which is calculated from the tracebuf starttime and number
+       * the endtime, which is calculated from the packet starttime and number
        * of samples.  In essence, this maintains a time line based on the starttime
-       * of received tracebufs.  It also retains the variations of the sample rate
+       * of received packets.  It also retains the variations of the sample rate
        * and other characteristics of the original data stream to some degree. */
       
       mst->starttime = mst->endtime - (hptime_t) (((double)(mst->numsamples - 1) / mst->samprate * HPTMODULUS) + 0.5);
-      
+      mst_duration = (hptime_t) (((double)(mst->numsamples) / mst->samprate * HPTMODULUS) + 0.5);
+
       /* Allocate & init per-trace stats structure if needed */
       if ( ! mst->prvtptr )
 	{
@@ -402,22 +436,77 @@ handlestream (char *streamname, char *typename, PktChannel *pktchan,
 	      ms_log (2, "Cannot allocate buffer for trace stats!\n");
 	      return -1;
 	    }
-	  
-	  ((TraceStats *)mst->prvtptr)->earliest = HPTERROR;
-	  ((TraceStats *)mst->prvtptr)->latest = HPTERROR;
-	  ((TraceStats *)mst->prvtptr)->update = HPTERROR;
-	  ((TraceStats *)mst->prvtptr)->xmit = HPTERROR;
-	  ((TraceStats *)mst->prvtptr)->pktcount = 0;
-	  ((TraceStats *)mst->prvtptr)->reccount = 0;
+
+          clearmststats (mst);
 	}
       
       ((TraceStats *)mst->prvtptr)->update = dlp_time();
       ((TraceStats *)mst->prvtptr)->pktcount += 1;
-      
-      if ( (recordspacked = packtraces (mst, 0, HPTERROR)) < 0 )
+
+      /* Set flush flag if rate >= flush rate, and, optionally, if duration >= flush duration */
+      flushflag = (flushfastrate && (mst->samprate >= flushfastrate) &&
+		   (((flushfastduration > 0) && (mst_duration >= flushfastduration)) || (flushfastduration == 0)));
+
+      /* If there is a gap or overlap between this data record and previously 
+       * unwritten data for this SEED NSLC, we will have added a new MSTrace 
+       * to the group. If so, first flush the previously unwritten data. */
+      if ( existing_mst && existing_mst->numsamples > 0 )
+	{
+	  if (verbose >= 2)
+	    {
+	      ms_log (0, "%s(): streamname=%s mst->samprate=%.2lf GAP flushfast=%d@%" PRId64 " flushflag=%d\n",
+                      __func__, streamname, mst->samprate, flushfastrate,
+                      MS_HPTIME2EPOCH(flushfastduration), 1);
+	    }
+	  if ( (recordspacked = packtraces (existing_mst, 1, HPTERROR)) < 0 )
+	    {
+	      ms_log (2, "Cannot pack trace buffer or send records!\n");
+	      return -1;
+	    }
+	}
+
+      /* Pack data for this SEED NSLC. */
+      if (verbose >= 2)
+	{
+	  ms_log (0, "%s(): streamname=%s mst->samprate=%.2lf nsamples = %" PRId64 " flushfast=%d@%" PRId64 " flushflag=%d\n",
+		  __func__, streamname, mst->samprate, mst->numsamples, flushfastrate,
+                  MS_HPTIME2EPOCH(flushfastduration), flushflag);
+	}
+      if ( (recordspacked = packtraces (mst, flushflag, HPTERROR)) < 0 )
 	{
 	  ms_log (2, "Cannot pack trace buffer or send records!\n");
 	  return -1;
+	}
+
+      /* Only remove an MSTrace from the group/list if we have multiple */
+      /* MSTrace objects for the SNCL in the group and the previously */
+      /* existing MSTrace has no samples left.  */
+      mst = mstg->traces;
+      prevmst = NULL;
+      while (mst && existing_mst && existing_mst->numsamples <= 0) 
+        {
+	  /* This is the ONLY place we ever unlink and free an MSTrace.
+	   * This is only done when we have 2 MSTrace entries for the same NSLC,
+	   * in which case we free the older MSTrace record.
+	   * Freeing the MSTrace structure will set the pointer to NULL. */
+	  if ( mst == existing_mst )
+	    {
+	      if ( verbose )
+		logmststats (mst);
+
+	      if ( ! prevmst )
+		mstg->traces = mst->next;
+	      else
+		prevmst->next = mst->next;
+	      
+	      mst_free (&mst);
+              existing_mst = NULL;
+	    }
+	  else
+	    {
+	      prevmst = mst;
+	      mst = mst->next;
+	    }
 	}
     }
   
@@ -445,7 +534,7 @@ packtraces (MSTrace *mst, int flush, hptime_t flushtime)
   static struct blkt_1001_s Blkt1001;
   static MSRecord *mstemplate = NULL;
 
-  MSTrace *prevmst;
+
   void *handlerdata = mst;
   int trpackedrecords = 0;
   int packedrecords = 0;
@@ -473,6 +562,7 @@ packtraces (MSTrace *mst, int flush, hptime_t flushtime)
 
   if ( mst )
     {
+      /* Pack only the specified MSTrace. */
       encoding = (mst->sampletype == 'f') ? DE_FLOAT32 : DE_STEIM2;
       
       strcpy (mstemplate->network, mst->network);
@@ -480,7 +570,7 @@ packtraces (MSTrace *mst, int flush, hptime_t flushtime)
       strcpy (mstemplate->location, mst->location);
       strcpy (mstemplate->channel, mst->channel);
       
-      trpackedrecords = mst_pack (mst, sendrecord, handlerdata, 512,
+      trpackedrecords = mst_pack (mst, sendrecord, handlerdata, msreclen,
     				  encoding, 1, NULL, flushflag,
  				  verbose-2, mstemplate);
       
@@ -491,16 +581,19 @@ packtraces (MSTrace *mst, int flush, hptime_t flushtime)
     }
   else
     {
+      /* Process all MSTrace entries in the group, flushing if either:
+       * a.  the flush flag was specified by the caller, or
+       * b.  the trace is older than the flushtime specified by the caller. */
       mst = mstg->traces;
-      prevmst = NULL;
-      
+
       while ( mst && stopsig != 2 )
 	{
+	  int channel_flushed = 0;
+
 	  if ( mst->numsamples > 0 )
 	    {
 	      encoding = (mst->sampletype == 'f') ? DE_FLOAT32 : DE_STEIM2;
 	      
-	      /* Flush data buffer if update time is less than flushtime */
 	      if ( flush == 0 && mst->prvtptr && flushtime != HPTERROR )
 		if (((TraceStats *)mst->prvtptr)->update < flushtime )
 		  {
@@ -508,6 +601,7 @@ packtraces (MSTrace *mst, int flush, hptime_t flushtime)
                       ms_log (0, "Flushing data buffer for %s_%s_%s_%s\n",
                               mst->network, mst->station, mst->location, mst->channel);
 		    flushflag = 1;
+		    channel_flushed = flushflag;
 		  }
 	      
               strcpy (mstemplate->network, mst->network);
@@ -515,7 +609,7 @@ packtraces (MSTrace *mst, int flush, hptime_t flushtime)
               strcpy (mstemplate->location, mst->location);
               strcpy (mstemplate->channel, mst->channel);
 
-	      trpackedrecords = mst_pack (mst, sendrecord, handlerdata, 512,
+	      trpackedrecords = mst_pack (mst, sendrecord, handlerdata, msreclen,
 					  encoding, 1, NULL, flushflag,
 					  verbose-2, mstemplate);
 	      
@@ -525,28 +619,14 @@ packtraces (MSTrace *mst, int flush, hptime_t flushtime)
 	      packedrecords += trpackedrecords;
 	    }
 	  
-	  /* Remove trace buffer entry if no samples remaining */
-	  if ( mst->numsamples <= 0 )
+	  /* Log and clear the channel stats if we flushed this channel. */
+	  if ( verbose && mst->numsamples <= 0 && channel_flushed )
 	    {
-	      MSTrace *nextmst = mst->next;
-	      
-	      if ( verbose )
-		logmststats (mst);
-	      
-	      if ( ! prevmst )
-		mstg->traces = mst->next;
-	      else
-		prevmst->next = mst->next;
-	      
-	      mst_free (&mst);
-	      
-	      mst = nextmst;
+	      logmststats (mst);
+	      clearmststats (mst);
 	    }
-	  else
-	    {
-	      prevmst = mst;
-	      mst = mst->next;
-	    }
+
+	  mst = mst->next;
 	}
     }
   
@@ -669,6 +749,26 @@ logmststats ( MSTrace *mst )
 
 
 /*********************************************************************
+ * clearmststats:
+ *
+ * Clear MSTrace stats.
+ *********************************************************************/
+static void
+clearmststats ( MSTrace *mst )
+{
+  if (mst->prvtptr)
+  {
+    ((TraceStats *)mst->prvtptr)->earliest = HPTERROR;
+    ((TraceStats *)mst->prvtptr)->latest = HPTERROR;
+    ((TraceStats *)mst->prvtptr)->update = HPTERROR;
+    ((TraceStats *)mst->prvtptr)->xmit = HPTERROR;
+    ((TraceStats *)mst->prvtptr)->pktcount = 0;
+    ((TraceStats *)mst->prvtptr)->reccount = 0;
+  }
+}
+
+
+/*********************************************************************
  * isalldig:
  *
  * Return 1 if the specified string is all digits and 0 otherwise.
@@ -732,11 +832,21 @@ parameter_proc (int argcount, char **argvec)
 	}
       else if (strcmp (argvec[optind], "-f") == 0)
 	{
-	  flushlatency = strtol (getoptval(argcount, argvec, optind++), NULL, 10);
+	  flushlatency = (int) strtol (getoptval(argcount, argvec, optind++), NULL, 10);
+	}
+      else if (strcmp (argvec[optind], "-F") == 0)
+	{
+	  flushfastrate = (int) strtol (getoptval(argcount, argvec, optind++), &tptr, 10);
+
+          /* Parse optional minimum duration as <flushrate>@<minduration> */
+	  if (tptr && *tptr == '@')
+            {
+              flushfastduration = (hptime_t) (strtod (++tptr, NULL) * HPTMODULUS + 0.5);
+            }
 	}
       else if (strcmp (argvec[optind], "-R") == 0)
 	{
-	  reconnectinterval = strtol (getoptval(argcount, argvec, optind++), NULL, 10);
+	  reconnectinterval = (int) strtol (getoptval(argcount, argvec, optind++), NULL, 10);
 	}
       else if (strcmp (argvec[optind], "-m") == 0)
 	{
@@ -752,7 +862,11 @@ parameter_proc (int argcount, char **argvec)
 	}
       else if (strcmp (argvec[optind], "-S") == 0)
 	{
-	  statefile = getoptval(argcount, argvec, optind++);
+	  statefile = strdup(getoptval(argcount, argvec, optind++));
+	}
+      else if (strcmp (argvec[optind], "-l") == 0)
+	{
+	  msreclen = (int) strtol(getoptval(argcount, argvec, optind++), NULL, 10);
 	}
       else if (strncmp (argvec[optind], "-", 1) == 0)
 	{
