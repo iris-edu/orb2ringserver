@@ -70,6 +70,13 @@ bytes.  Other common options are 256 or 128 for reduced latency.
 Note that this option does not effect data that are already miniSEED
 records, which are forwarded directly.
 
+.IP "-I [21I]"
+Specify the miniSEED encoding to use for 32-bit integers.  A value
+of \fI2\fP means Steim-2 compression, \fI1\fP means Steim-1 compression,
+and \fII\fP means uncompressed integers.  The default encoding
+for 32-bit integers is to first try Steim-2, then Steim-1 and finally
+use uncompressed.
+
 .IP "-R interval"
 If the connection to the destination ringserver is broken attempt to
 reconnect at \fIinterval\fP in seconds, default is 60 seconds.  If the

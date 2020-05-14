@@ -21,7 +21,7 @@
 #include "orb.h"
 
 #define PACKAGE "orb2ringserver"
-#define VERSION "1.6dev"
+#define VERSION "1.6RC1"
 
 static int verbose   = 0;
 static char *match   = 0; /* ORB streams to match */
@@ -38,6 +38,10 @@ static hptime_t flushfastduration = 0;   /* Desired miniSEED duration in HPTMODU
 
 #define DEFAULT_MSRECLEN 512 /* Default miniSEED recordlength */
 static int msreclen = DEFAULT_MSRECLEN;
+
+/* A non-official data encoding for "Steim-2 then Steim-1 then 32-bit integers" logic */
+#define DYNAMIC_STEIM21I -11
+static int int32encoding = DYNAMIC_STEIM21I; /* Data sample encoding for 32-bit integer data */
 
 static char *orbaddr = 0;
 static char *rsaddr  = 0;
@@ -59,7 +63,8 @@ typedef struct tracestats_s
 
 static int handlestream (char *streamname, char *typename, PktChannel *pktchan,
                          char *rawpacket, int nbytes);
-static int packtraces (MSTrace *mst, int flush, hptime_t flushtime);
+static int packtrace (MSTrace *mst, int flush);
+static int packalltraces (int flush, hptime_t flushtime);
 static void sendrecord (char *record, int reclen, void *handlerdata);
 static void logmststats (MSTrace *mst);
 static void clearmststats (MSTrace *mst);
@@ -83,6 +88,7 @@ usage (void)
   fprintf (stderr, "                      Duration is specified in seconds of time series coverage\n");
   fprintf (stderr, "                      A rate of 0 (default value) disables this feature.\n");
   fprintf (stderr, "  -l reclen           miniSEED record length to create, default is %d\n", DEFAULT_MSRECLEN);
+  fprintf (stderr, "  -I [21I]            Encoding for 32-bit integers, default is dynamic\n");
   fprintf (stderr, "  -R interval         Reconnect to ringserver at this interval in seconds\n");
   fprintf (stderr, "  -m match            Regular expression to match ORB packets,\n");
   fprintf (stderr, "                        default is all waveform data.\n");
@@ -297,7 +303,7 @@ main (int argc, char **argv)
     /* Flush data buffers not updated for flushlatency seconds */
     if (flushlatency)
     {
-      if (packtraces (NULL, 0, (dlp_time () - MS_EPOCH2HPTIME (flushlatency))) < 0)
+      if (packalltraces (0, (dlp_time () - MS_EPOCH2HPTIME (flushlatency))) < 0)
       {
         ms_log (2, "Cannot pack trace buffers or send records!\n");
       }
@@ -306,7 +312,7 @@ main (int argc, char **argv)
   } /* End of main client loop */
 
   /* Flush all remaining data streams and close the connections */
-  packtraces (NULL, 1, HPTERROR);
+  packalltraces (1, HPTERROR);
 
   orbclose (orb);
 
@@ -460,7 +466,7 @@ handlestream (char *streamname, char *typename, PktChannel *pktchan,
                 __func__, streamname, mst->samprate, flushfastrate,
                 MS_HPTIME2EPOCH (flushfastduration), 1);
       }
-      if ((recordspacked = packtraces (existing_mst, 1, HPTERROR)) < 0)
+      if ((recordspacked = packtrace (existing_mst, 1)) < 0)
       {
         ms_log (2, "Cannot pack trace buffer or send records!\n");
         return -1;
@@ -474,7 +480,7 @@ handlestream (char *streamname, char *typename, PktChannel *pktchan,
               __func__, streamname, mst->samprate, mst->numsamples, flushfastrate,
               MS_HPTIME2EPOCH (flushfastduration), flushflag);
     }
-    if ((recordspacked = packtraces (mst, flushflag, HPTERROR)) < 0)
+    if ((recordspacked = packtrace (mst, flushflag)) < 0)
     {
       ms_log (2, "Cannot pack trace buffer or send records!\n");
       return -1;
@@ -516,30 +522,30 @@ handlestream (char *streamname, char *typename, PktChannel *pktchan,
 } /* End of handlestream() */
 
 /*********************************************************************
- * packtraces:
+ * packtrace:
  *
- * Package remaining data in buffer(s) into miniSEED records.  If mst
- * is NULL all streams will be packed, otherwise only the specified
- * stream will be packed.
+ * Package remaining data in buffer for specified MSTrace into
+ * miniSEED records.
  *
- * If the flush argument is true the stream buffers will be flushed
+ * If the flush argument is true the stream buffer will be flushed
  * completely, otherwise records are only packed when enough samples
  * are available to fill a record.
  *
  * Returns the number of records packed on success and -1 on error.
  *********************************************************************/
 static int
-packtraces (MSTrace *mst, int flush, hptime_t flushtime)
+packtrace (MSTrace *mst, int flush)
 {
   static struct blkt_1000_s Blkt1000;
   static struct blkt_1001_s Blkt1001;
   static MSRecord *mstemplate = NULL;
 
   void *handlerdata   = mst;
-  int trpackedrecords = 0;
   int packedrecords   = 0;
-  int flushflag       = flush;
   int encoding;
+
+  if (!mst)
+    return -1;
 
   /* Set up MSRecord template, include blockette 1000 and 1001 */
   if ((mstemplate = msr_init (mstemplate)) == NULL)
@@ -547,91 +553,127 @@ packtraces (MSTrace *mst, int flush, hptime_t flushtime)
     ms_log (2, "Cannot initialize packing template (out of memory?)\n");
     return -1;
   }
-  else
-  {
-    mstemplate->dataquality = 'D';
 
-    /* Add blockettes 1000 & 1001 to template */
-    memset (&Blkt1000, 0, sizeof (struct blkt_1000_s));
-    msr_addblockette (mstemplate, (char *)&Blkt1000,
-                      sizeof (struct blkt_1001_s), 1000, 0);
-    memset (&Blkt1001, 0, sizeof (struct blkt_1001_s));
-    msr_addblockette (mstemplate, (char *)&Blkt1001,
-                      sizeof (struct blkt_1001_s), 1001, 0);
+  mstemplate->dataquality = 'D';
+
+  /* Add blockettes 1000 & 1001 to template */
+  memset (&Blkt1000, 0, sizeof (struct blkt_1000_s));
+  msr_addblockette (mstemplate, (char *)&Blkt1000,
+                    sizeof (struct blkt_1001_s), 1000, 0);
+  memset (&Blkt1001, 0, sizeof (struct blkt_1001_s));
+  msr_addblockette (mstemplate, (char *)&Blkt1001,
+                    sizeof (struct blkt_1001_s), 1001, 0);
+
+  strcpy (mstemplate->network, mst->network);
+  strcpy (mstemplate->station, mst->station);
+  strcpy (mstemplate->location, mst->location);
+  strcpy (mstemplate->channel, mst->channel);
+
+  /* Determine encoding based on sample type */
+  if ( mst->sampletype == 'f' )
+    encoding = DE_FLOAT32;
+  else if ( mst->sampletype == 'd' )
+    encoding = DE_FLOAT64;
+  else
+    encoding = int32encoding;
+
+  /* Try Steim-2 first if using dynamic 32-bit integer encoding */
+  if (encoding == DYNAMIC_STEIM21I)
+    encoding = DE_STEIM2;
+
+  packedrecords = mst_pack (mst, sendrecord, handlerdata, msreclen,
+                            encoding, 1, NULL, flush, 0, mstemplate);
+
+  /* Retry with Steim-1 if failed and using dynamic 32-bit integer encoding */
+  if ( packedrecords == -1 &&
+       encoding == DE_STEIM2 &&
+       int32encoding == DYNAMIC_STEIM21I)
+  {
+    if (verbose >= 2)
+      ms_log (0, "Failed to compress data with Steim-2 %s_%s_%s_%s, trying Steim-1\n",
+              mst->network, mst->station, mst->location, mst->channel);
+
+    packedrecords = mst_pack (mst, sendrecord, handlerdata, msreclen,
+                              DE_STEIM1, 1, NULL, flush, 0, mstemplate);
   }
 
-  if (mst)
+  /* Retry with raw 32-bit integers if failed and using dynamic 32-bit integer encoding */
+  if ( packedrecords == -1 &&
+       encoding == DE_STEIM1 &&
+       int32encoding == DYNAMIC_STEIM21I)
   {
-    /* Pack only the specified MSTrace. */
-    encoding = (mst->sampletype == 'f') ? DE_FLOAT32 : DE_STEIM2;
+    if (verbose >= 2)
+      ms_log (0, "Failed to compress data with Steim-1 %s_%s_%s_%s, trying 32-bit integers\n",
+              mst->network, mst->station, mst->location, mst->channel);
 
-    strcpy (mstemplate->network, mst->network);
-    strcpy (mstemplate->station, mst->station);
-    strcpy (mstemplate->location, mst->location);
-    strcpy (mstemplate->channel, mst->channel);
-
-    trpackedrecords = mst_pack (mst, sendrecord, handlerdata, msreclen,
-                                encoding, 1, NULL, flushflag,
-                                verbose - 2, mstemplate);
-
-    if (trpackedrecords == -1)
-      return -1;
-
-    packedrecords += trpackedrecords;
-  }
-  else
-  {
-    /* Process all MSTrace entries in the group, flushing if either:
-       * a.  the flush flag was specified by the caller, or
-       * b.  the trace is older than the flushtime specified by the caller. */
-    mst = mstg->traces;
-
-    while (mst && stopsig != 2)
-    {
-      flushflag = flush;
-
-      if (mst->numsamples > 0)
-      {
-        encoding = (mst->sampletype == 'f') ? DE_FLOAT32 : DE_STEIM2;
-
-        if (flushflag == 0 && mst->prvtptr && flushtime != HPTERROR &&
-            ((TraceStats *)mst->prvtptr)->update < flushtime)
-        {
-          if (verbose >= 1)
-            ms_log (0, "Flushing data buffer for %s_%s_%s_%s due to flush latency\n",
-                    mst->network, mst->station, mst->location, mst->channel);
-
-          flushflag = 1;
-        }
-
-        strcpy (mstemplate->network, mst->network);
-        strcpy (mstemplate->station, mst->station);
-        strcpy (mstemplate->location, mst->location);
-        strcpy (mstemplate->channel, mst->channel);
-
-        trpackedrecords = mst_pack (mst, sendrecord, handlerdata, msreclen,
-                                    encoding, 1, NULL, flushflag,
-                                    verbose - 2, mstemplate);
-
-        if (trpackedrecords == -1)
-          return -1;
-
-        packedrecords += trpackedrecords;
-      }
-
-      /* Log and clear the channel stats if we flushed this channel. */
-      if (verbose && mst->numsamples <= 0 && flushflag)
-      {
-        logmststats (mst);
-        clearmststats (mst);
-      }
-
-      mst = mst->next;
-    }
+    packedrecords = mst_pack (mst, sendrecord, handlerdata, msreclen,
+                              DE_INT32, 1, NULL, flush, 0, mstemplate);
   }
 
   return packedrecords;
-} /* End of packtraces() */
+}  /* End of packtrace() */
+
+/*********************************************************************
+ * packalltraces:
+ *
+ * Package data in buffer(s) into miniSEED records.
+ *
+ * If the flush argument is true the stream buffers will be flushed
+ * completely, otherwise records are only packed when CHAD
+ *
+ * Returns the number of records packed on success and -1 on error.
+ *********************************************************************/
+static int
+packalltraces (int flush, hptime_t flushtime)
+{
+  MSTrace *mst;
+
+  int trpackedrecords = 0;
+  int packedrecords   = 0;
+  int flushflag       = flush;
+
+  /* Process all MSTrace entries in the group, flushing if either:
+   * a.  the flush flag was specified by the caller, or
+   * b.  the trace is older than the flushtime specified by the caller. */
+  mst = mstg->traces;
+
+  while (mst && stopsig != 2)
+  {
+    flushflag = flush;
+
+    if (mst->numsamples > 0)
+    {
+      /* Determine if last update time for traces is oler than flush time */
+      if (flushflag == 0 && mst->prvtptr && flushtime != HPTERROR &&
+          ((TraceStats *)mst->prvtptr)->update < flushtime)
+      {
+        if (verbose >= 1)
+          ms_log (0, "Flushing data buffer for %s_%s_%s_%s due to flush latency\n",
+                  mst->network, mst->station, mst->location, mst->channel);
+
+        flushflag = 1;
+      }
+
+      trpackedrecords = packtrace (mst, flushflag);
+
+      if (trpackedrecords == -1)
+        return -1;
+
+      packedrecords += trpackedrecords;
+    }
+
+    /* Log and clear the channel stats if we flushed this channel. */
+    if (verbose && mst->numsamples <= 0 && flushflag)
+    {
+      logmststats (mst);
+      clearmststats (mst);
+    }
+
+    mst = mst->next;
+  }
+
+  return packedrecords;
+} /* End of packalltraces() */
 
 /*********************************************************************
  * sendrecord:
@@ -837,6 +879,22 @@ parameter_proc (int argcount, char **argvec)
       if (tptr && *tptr == '@')
       {
         flushfastduration = (hptime_t) (strtod (++tptr, NULL) * HPTMODULUS + 0.5);
+      }
+    }
+    else if (strcmp (argvec[optind], "-I") == 0)
+    {
+      tptr = getoptval (argcount, argvec, optind++);
+
+      if (strcmp (tptr, "2") == 0)
+        int32encoding = DE_STEIM2;
+      else if (strcmp (tptr, "1") == 0)
+        int32encoding = DE_STEIM1;
+      else if (strcmp (tptr, "I") == 0)
+        int32encoding = DE_INT32;
+      else
+      {
+        fprintf (stderr, "Unrecognized option for -I: %s\n", tptr);
+        exit (1);
       }
     }
     else if (strcmp (argvec[optind], "-R") == 0)
