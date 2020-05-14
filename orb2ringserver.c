@@ -376,6 +376,7 @@ handlestream (char *streamname, char *typename, PktChannel *pktchan,
     /* Antelope miniSEED packet. */
     if (verbose >= 2)
       ms_log (0, "%s(): streamname=%s miniSEED\n", __func__, streamname);
+
     sendrecord (rawpacket + 14, origreclen, NULL);
     recordspacked = 1;
   }
@@ -587,21 +588,21 @@ packtraces (MSTrace *mst, int flush, hptime_t flushtime)
 
     while (mst && stopsig != 2)
     {
-      int channel_flushed = 0;
+      flushflag = flush;
 
       if (mst->numsamples > 0)
       {
         encoding = (mst->sampletype == 'f') ? DE_FLOAT32 : DE_STEIM2;
 
-        if (flush == 0 && mst->prvtptr && flushtime != HPTERROR)
-          if (((TraceStats *)mst->prvtptr)->update < flushtime)
-          {
-            if (verbose >= 1)
-              ms_log (0, "Flushing data buffer for %s_%s_%s_%s\n",
-                      mst->network, mst->station, mst->location, mst->channel);
-            flushflag       = 1;
-            channel_flushed = flushflag;
-          }
+        if (flushflag == 0 && mst->prvtptr && flushtime != HPTERROR &&
+            ((TraceStats *)mst->prvtptr)->update < flushtime)
+        {
+          if (verbose >= 1)
+            ms_log (0, "Flushing data buffer for %s_%s_%s_%s due to flush latency\n",
+                    mst->network, mst->station, mst->location, mst->channel);
+
+          flushflag = 1;
+        }
 
         strcpy (mstemplate->network, mst->network);
         strcpy (mstemplate->station, mst->station);
@@ -619,7 +620,7 @@ packtraces (MSTrace *mst, int flush, hptime_t flushtime)
       }
 
       /* Log and clear the channel stats if we flushed this channel. */
-      if (verbose && mst->numsamples <= 0 && channel_flushed)
+      if (verbose && mst->numsamples <= 0 && flushflag)
       {
         logmststats (mst);
         clearmststats (mst);

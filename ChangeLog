@@ -5,6 +5,7 @@
 	  * Add -l option to specify miniSEED record length to create.
 	  * Avoid holding time-torn data in internal buffers, and instead
 	    flush the previous data when a time tear is detected.
+	- Fix flushing based on latency to proper channels only.
 
 2016.295: 1.5
 	- Update libmseed to 2.18.
