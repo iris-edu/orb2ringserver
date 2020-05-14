@@ -16,6 +16,8 @@
 <pre >
 <b>orb2ringserver</b>  [-v]
     [-f <i>flush-latency</i>]
+    [-F <i>flush-rate[@flush-duration</i>]]
+    [-l <i>reclen</i>]
     [-R <i>reconnect-interval</i>]
     [-m <i>match</i>]
     [-r <i>reject</i>]
@@ -34,7 +36,7 @@
 
 <p >Due to the differences between ORB packet lengths and miniSEED records, the program maintains a small internal buffer for each time series.  This allows the program to create full and efficient miniSEED records, but also introduces a slight delay or latency in the data transmission.  The amount of delay depends on the sample rate of the data and the compressability of the series, for most purposes it is inconsequential.  If the original packet from the ORB is already a 512-byte miniSEED record no delay is incurred.</p>
 
-<p >The orbserver and ringserver are specified as <i>host</i>:<i>port</i>. Both host and port may be empty (blank), in which case <i>host</i> defaults to <b>localhost</b>, and port defaults to <b>6510</b> (for the orbserver) or <b>16000</b> (for the ringserver).  The orbserver port may be either an explicit number, or an alphanumeric name which is looked up in the file <i>$ANTELOPE/data/pf/orbserver\_names.pf</i>.</p>
+<p >The orbserver and ringserver are specified as <i>host</i>:<i>port</i>. Both host and port may be empty (blank), in which case <i>host</i> defaults to <b>localhost</b>, and port defaults to <b>6510</b> (for the orbserver) or <b>16000</b> (for the ringserver).  The orbserver port may be either an explicit number, or an alphanumeric name which is looked up in the file <i>$ANTELOPE/data/pf/orbserver_names.pf</i>.</p>
 
 ## <a id='options'>Options</a>
 
@@ -45,6 +47,18 @@
 <b>-f latency</b>
 
 <p style="padding-left: 30px;">Flush data from internal buffers when no new packets have arrived for <i>latency</i> seconds, default is 500 seconds.  The latency check is applied to each channel/stream individually.  This flushing mechanism ensures that data do not remain in the buffers when the channel has stopped flowing.  The mechanism can be disabled by specifying a value of 0.</p>
+
+<b>-F rate[@duration]</b>
+
+<p style="padding-left: 30px;">Perform a fast flush from internal buffers for data channels where <i>rate</i> (specified in samples per second) is >= data sampling rate. If a <i>duration</i> (in seconds) is specified the fast flush will occur when at least that duration of data has been accumulated.  This option will almost certainly result in the creation of unfilled data records, but allows controlling latency of data streams added by this program.  The mechanism is turned off by default (a value of zero).</p>
+
+<b>-l reclen</b>
+
+<p style="padding-left: 30px;">Specify the miniSEED record length to create, with a default of 512 bytes.  Other common options are 256 or 128 for reduced latency. Note that this option does not effect data that are already miniSEED records, which are forwarded directly.</p>
+
+<b>-I [21I]</b>
+
+<p style="padding-left: 30px;">Specify the miniSEED encoding to use for 32-bit integers.  A value of <i>2</i> means Steim-2 compression, <i>1</i> means Steim-1 compression, and <i>I</i> means uncompressed integers.  The default encoding for 32-bit integers is to first try Steim-2, then Steim-1 and finally use uncompressed.</p>
 
 <b>-R interval</b>
 
@@ -67,8 +81,8 @@
 ## <a id='example'>Example</a>
 
 <pre >
-%<b> orb2orb -m 'IU.\*' -S state/orb2ringserver -v localhost:6510 localhost:16000</b>
-orb2ringserver: orb2ringserver version: 0.1
+%<b> orb2orb -m 'IU.*' -S state/orb2ringserver -v localhost:6510 localhost:16000</b>
+orb2ringserver: orb2ringserver version: 1.0
 orb2ringserver: Connected to orbserver at localhost:6510
 orb2ringserver: Resuming ORB position from state file
 orb2ringserver: Connected to ringserver at localhost:16000
@@ -77,11 +91,11 @@ orb2ringserver: Connected to ringserver at localhost:16000
 
 ## <a id='usage'>Usage</a>
 
-<p >This program generates 512-byte miniSEED records with the expectation that the destination ringserver can easily be configured to serve data via the SeedLink protocol.  The ringserver nor the DataLink protocol are limited to miniSEED or 512-bytes, but this is expected to be the most common use for this software.</p>
+<p >This program generates 512-byte miniSEED records by default with the expectation that the destination ringserver can easily be configured to serve data via the SeedLink protocol.  The ringserver nor the DataLink protocol are limited to miniSEED or 512-bytes, but this is expected to be the most common use for this software.</p>
 
 <pre >
 The ringserver software is available from:
-<b>https://seiscode.iris.washington.edu/projects/ringserver</b>
+<b>https://github.com/iris-edu/ringserver</b>
 </pre>
 
 ## <a id='bugs-and-caveats'>Bugs And Caveats</a>
@@ -100,4 +114,4 @@ IRIS Data Management Center
 </pre>
 
 
-(man page 2012-11-15)
+(man page 2020-05-13)
