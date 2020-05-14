@@ -7,6 +7,7 @@
 	    flush the previous data when a time tear is detected.
 	- Fix flushing based on latency to proper channels only.
 	- Update libdali to 1.8, with support for IPv6, etc.
+	- Update libmseed to 2.19.6.
 
 2016.295: 1.5
 	- Update libmseed to 2.18.
