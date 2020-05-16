@@ -21,7 +21,7 @@
 #include "orb.h"
 
 #define PACKAGE "orb2ringserver"
-#define VERSION "1.6RC1"
+#define VERSION "1.6"
 
 static int verbose   = 0;
 static char *match   = 0; /* ORB streams to match */
