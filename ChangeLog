@@ -1,4 +1,4 @@
-2020.134: 1.6RC1
+2020.134: 1.6
 	- Incorporate changes from Doug Neuhauser, including these features:
 	  # Add -F option to control flushing of data based on channel rate
 	    and duration.
